@@ -1,0 +1,126 @@
+specification {
+  element system {
+    style {
+      color indigo
+      size large
+    }
+  }
+
+  element user {
+    style {
+      shape person
+      color green
+    }
+  }
+
+  element apiGateway {
+    style {
+      icon tech:nginx
+      color secondary
+    }
+  }
+
+  element microservice {
+    style {
+      shape component
+      color primary
+    }
+  }
+
+  element database {
+    style {
+      shape storage
+      color muted
+    }
+  }
+
+  element queue {
+    style {
+      shape queue
+      color amber
+    }
+  }
+
+  relationship sync {
+    line solid
+    color indigo
+    head vee
+  }
+  relationship async {
+    line dotted
+    color amber
+    head vee
+  }
+
+  tag critical {
+    color #ff0000
+  }
+}
+
+model {
+  user customer 'Покупатель / Продавец'
+
+  api = apiGateway 'API Gateway' {
+    #critical
+  }
+
+  identity = microservice 'Identity Service' {
+    description 'Управление пользователями, авторизация и аутентификация'
+  }
+
+  catalog = microservice 'Catalog Service' {
+    description 'Управление каталогом товаров'
+  }
+
+  orders = microservice 'Order Service' {
+    #critical
+    description 'Оформление и управление заказами'
+  }
+
+  payment = microservice 'Payment Service' {
+    #critical
+    description 'Обработка платежей'
+  }
+
+  personalization = microservice 'Personalization Service' {
+    description 'Персонализация ленты товаров'
+  }
+
+  notifications = microservice 'Notification Service' {
+    description 'Уведомления о статусах заказов'
+  }
+
+  events = queue 'Event Bus' {
+    description 'Асинхронный обмен событиями'
+  }
+
+  dbIdentity = database 'Identity DB'
+  dbCatalog = database 'Catalog DB'
+  dbOrders = database 'Order DB'
+  dbPayment = database 'Payment DB'
+  dbPersonalization = database 'Personalization DB'
+  dbNotifications = database 'Notification DB'
+
+  customer -[sync]-> api 'Запросы через HTTPS'
+
+  api -[sync]-> identity 'Запрос авторизации / регистрации'
+  api -[sync]-> catalog 'Запрос каталога'
+  api -[sync]-> orders 'Оформление заказа'
+  api -[sync]-> personalization 'Получить рекомендации'
+
+  orders -[sync]-> payment 'Валидация и платеж'
+
+  orders -[async]-> events 'OrderCreated'
+  payment -[async]-> events 'PaymentCompleted'
+  events -[async]-> notifications 'Order & Payment events'
+  events -[async]-> personalization 'Пользовательские события'
+
+  personalization -[sync]-> catalog 'Запрос товарных данных'
+
+  identity -> dbIdentity
+  catalog -> dbCatalog
+  orders -> dbOrders
+  payment -> dbPayment
+  personalization -> dbPersonalization
+  notifications -> dbNotifications
+}
