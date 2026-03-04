@@ -1,0 +1,3 @@
+/marketplace/apis/*
+/marketplace/models/*
+!/marketplace/models/extra_models.py

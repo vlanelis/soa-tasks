@@ -1,0 +1,33 @@
+# coding: utf-8
+
+from typing import ClassVar, Dict, List, Tuple  # noqa: F401
+
+{{#imports}}
+{{import}}
+{{/imports}}
+from {{modelPackage}}.extra_models import TokenModel  # noqa: F401
+
+
+class Base{{classname}}:
+    subclasses: ClassVar[Tuple] = ()
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        Base{{classname}}.subclasses = Base{{classname}}.subclasses + (cls,)
+{{#operations}}
+{{#operation}}
+    async def {{operationId}}(
+        self,
+        {{#allParams}}
+        {{>impl_argument_definition}},
+        {{/allParams}}
+        {{#authMethods}}token_{{name}}: TokenModel,{{/authMethods}}
+    ) -> {{returnType}}{{^returnType}}None{{/returnType}}:
+        {{#notes}}"""{{.}}"""
+        ...{{/notes}}{{^notes}}...{{/notes}}
+{{^-last}}
+
+
+{{/-last}}
+{{/operation}}
+{{/operations}}
