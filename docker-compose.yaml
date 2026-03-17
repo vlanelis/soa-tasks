@@ -1,0 +1,110 @@
+services:
+  flight-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: flight
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 5
+
+  booking-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: booking
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 5
+
+  redis-master:
+    image: redis:7
+    container_name: redis-master
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  redis-replica:
+    image: redis:7
+    command: redis-server --replicaof redis-master 6379
+    depends_on:
+      - redis-master
+
+  redis-sentinel:
+    image: redis:7
+    container_name: redis-sentinel
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    ports:
+      - "26379:26379"
+    volumes:
+      - ./sentinel.conf:/etc/sentinel.conf
+    command: redis-sentinel /etc/sentinel.conf
+
+  flight-service:
+    build:
+      context: .
+      dockerfile: flight_service/Dockerfile
+      additional_contexts:
+        - proto=./proto
+    environment:
+      DB_URL: postgresql://postgres:postgres@flight-db:5432/flight
+      SERVICE_API_KEY: secret-service-key
+      REDIS_SENTINEL_HOST: redis-sentinel
+      REDIS_SENTINEL_PORT: "26379"
+      REDIS_MASTER_NAME: mymaster
+    depends_on:
+      flight-db:
+        condition: service_healthy
+      redis-master:
+        condition: service_started
+      redis-replica:
+        condition: service_started
+      redis-sentinel:
+        condition: service_started
+    ports:
+      - "50051:50051"
+
+  booking-service:
+    build:
+      context: .
+      dockerfile: booking_service/Dockerfile
+    environment:
+      DB_URL: postgresql://postgres:postgres@booking-db:5432/booking
+      FLIGHT_GRPC_TARGET: flight-service:50051
+      SERVICE_API_KEY: secret-service-key
+    depends_on:
+      booking-db:
+        condition: service_healthy
+      redis-master:
+        condition: service_started
+      redis-replica:
+        condition: service_started
+      redis-sentinel:
+        condition: service_started
+    ports:
+      - "8000:8000"
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    ports:
+      - 5050:80
+    environment:
+      PGADMIN_DEFAULT_EMAIL: demo@example.com
+      PGADMIN_DEFAULT_PASSWORD: secret
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'

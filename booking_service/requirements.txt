@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+grpcio
+grpcio-tools
+SQLAlchemy
+psycopg2-binary
+tenacity
+pybreaker
+redis
+alembic
+python-dotenv
+pydantic[email]
