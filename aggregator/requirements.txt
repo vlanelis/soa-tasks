@@ -1,0 +1,10 @@
+clickhouse-driver
+psycopg2-binary
+boto3
+pandas
+pyarrow
+apscheduler
+fastapi
+uvicorn
+python-dotenv
+tenacity
