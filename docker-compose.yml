@@ -1,0 +1,258 @@
+networks:
+  warehouse-net:
+    driver: bridge
+
+services:
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    hostname: kafka
+    mem_limit: 768m
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+      KAFKA_HEAP_OPTS: "-Xmx384m -Xms256m"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - warehouse-net
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:latest
+    mem_limit: 256m
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "PLAINTEXT://kafka:9092"
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"
+      SCHEMA_REGISTRY_HEAP_OPTS: "-Xmx128m"
+    ports:
+      - "8081:8081"
+    networks:
+      - warehouse-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  cassandra-1:
+    image: cassandra:latest
+    container_name: cassandra-1
+    hostname: cassandra-1
+    mem_limit: 1g
+    environment:
+      CASSANDRA_SEEDS: cassandra-1,cassandra-2,cassandra-3
+      CASSANDRA_CLUSTER_NAME: WarehouseCluster
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_RACK: RACK1
+      CASSANDRA_SNITCH: GossipingPropertyFileSnitch
+      MAX_HEAP_SIZE: "256M"
+      HEAP_NEWSIZE: "64M"
+      CASSANDRA_LISTEN_ADDRESS: cassandra-1
+      CASSANDRA_BROADCAST_ADDRESS: cassandra-1
+      CASSANDRA_RPC_ADDRESS: 0.0.0.0
+      CASSANDRA_START_RPC: "true"
+    ports:
+      - "9042:9042"
+    networks:
+      - warehouse-net
+    healthcheck:
+      test: [ "CMD", "cqlsh", "-e", "describe keyspaces", "cassandra-1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  cassandra-2:
+    image: cassandra:latest
+    container_name: cassandra-2
+    hostname: cassandra-2
+    mem_limit: 1g
+    environment:
+      CASSANDRA_SEEDS: cassandra-1,cassandra-2,cassandra-3
+      CASSANDRA_CLUSTER_NAME: WarehouseCluster
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_RACK: RACK1
+      CASSANDRA_SNITCH: GossipingPropertyFileSnitch
+      MAX_HEAP_SIZE: "256M"
+      HEAP_NEWSIZE: "64M"
+      CASSANDRA_LISTEN_ADDRESS: cassandra-2
+      CASSANDRA_BROADCAST_ADDRESS: cassandra-2
+      CASSANDRA_RPC_ADDRESS: 0.0.0.0
+      CASSANDRA_START_RPC: "true"
+    networks:
+      - warehouse-net
+    healthcheck:
+      test: [ "CMD", "cqlsh", "-e", "describe keyspaces", "cassandra-1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  cassandra-3:
+    image: cassandra:latest
+    container_name: cassandra-3
+    hostname: cassandra-3
+    mem_limit: 1g
+    environment:
+      CASSANDRA_SEEDS: cassandra-1,cassandra-2,cassandra-3
+      CASSANDRA_CLUSTER_NAME: WarehouseCluster
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_RACK: RACK1
+      CASSANDRA_SNITCH: GossipingPropertyFileSnitch
+      MAX_HEAP_SIZE: "256M"
+      HEAP_NEWSIZE: "64M"
+      CASSANDRA_LISTEN_ADDRESS: cassandra-3
+      CASSANDRA_BROADCAST_ADDRESS: cassandra-3
+      CASSANDRA_RPC_ADDRESS: 0.0.0.0
+      CASSANDRA_START_RPC: "true"
+    networks:
+      - warehouse-net
+    healthcheck:
+      test: [ "CMD", "cqlsh", "-e", "describe keyspaces", "cassandra-1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  cassandra-init:
+    image: cassandra:latest
+    depends_on:
+      cassandra-1:
+        condition: service_healthy
+      cassandra-2:
+        condition: service_healthy
+      cassandra-3:
+        condition: service_healthy
+    volumes:
+      - ./cassandra/init.cql:/init.cql
+    command: >
+      bash -c "cqlsh cassandra-1 -f /init.cql 2>&1 | grep -v 'AlreadyExists' || true"
+    networks:
+      - warehouse-net
+    restart: on-failure
+
+  producer:
+    build: ./producer
+    mem_limit: 256m
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      PRODUCER_PORT: 8000
+    networks:
+      - warehouse-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; exit(0 if requests.get('http://localhost:8000/health').status_code == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  consumer:
+    build: ./consumer
+    mem_limit: 256m
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      cassandra-init:
+        condition: service_completed_successfully
+      producer:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CASSANDRA_CONTACT_POINTS: cassandra-1,cassandra-2,cassandra-3
+      CASSANDRA_KEYSPACE: warehouse
+      DLQ_TOPIC: warehouse-events-dlq
+      CONSUMER_GROUP: warehouse-state-consumer
+      METRICS_PORT: 8080
+    networks:
+      - warehouse-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; exit(0 if requests.get('http://localhost:8080/health').status_code == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:latest
+    mem_limit: 256m
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - warehouse-net
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    mem_limit: 512m
+    depends_on:
+      - prometheus
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    networks:
+      - warehouse-net
+
+  tests:
+    build: ./tests
+    depends_on:
+      producer:
+        condition: service_healthy
+      consumer:
+        condition: service_healthy
+      cassandra-1:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    environment:
+      PRODUCER_URL: http://producer:8000
+      CONSUMER_URL: http://consumer:8080
+      CASSANDRA_CONTACT_POINTS: cassandra-1,cassandra-2,cassandra-3
+      CASSANDRA_KEYSPACE: warehouse
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      DOCKER_HOST: unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - warehouse-net
+    command: pytest -v --tb=short --maxfail=1
+
+volumes:
+  kafka_data:
+  grafana_data:
