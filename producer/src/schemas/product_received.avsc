@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "ProductReceived",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string"},
+    {"name": "timestamp", "type": "string"},
+    {"name": "data", "type": {
+        "type": "record",
+        "name": "ProductReceivedData",
+        "fields": [
+          {"name": "product_id", "type": "string"},
+          {"name": "quantity", "type": "int"},
+          {"name": "zone_id", "type": "string"},
+          {"name": "supplier_id", "type": ["null", "string"], "default": null}
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "type": "record",
+  "name": "OrderCompleted",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string"},
+    {"name": "timestamp", "type": "string"},
+    {"name": "data", "type": {
+        "type": "record",
+        "name": "OrderCompletedData",
+        "fields": [
+          {"name": "order_id", "type": "string"}
+        ]
+      }
+    }
+  ]
+}

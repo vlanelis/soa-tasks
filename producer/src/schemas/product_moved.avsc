@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "ProductMoved",
+  "fields": [
+    {"name": "event_id", "type": "string"},
+    {"name": "event_type", "type": "string"},
+    {"name": "timestamp", "type": "string"},
+    {"name": "data", "type": {
+        "type": "record",
+        "name": "ProductMovedData",
+        "fields": [
+          {"name": "product_id", "type": "string"},
+          {"name": "quantity", "type": "int"},
+          {"name": "from_zone", "type": "string"},
+          {"name": "to_zone", "type": "string"}
+        ]
+      }
+    }
+  ]
+}

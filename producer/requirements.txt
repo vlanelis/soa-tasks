@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+confluent-kafka[avro,schemaregistry]
+requests
+python-dotenv
