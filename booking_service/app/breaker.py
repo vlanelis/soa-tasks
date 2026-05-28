@@ -1,7 +1,7 @@
 import pybreaker
 import logging
 
-from .config import BREAKER_FAIL_MAX, BREAKER_RESET_TIMEOUT, BREAKER_RECOVER_TIMEOUT
+from .config import BREAKER_FAIL_MAX, BREAKER_RESET_TIMEOUT
 
 
 logger = logging.getLogger("breaker")
@@ -16,6 +16,5 @@ class LogListener(pybreaker.CircuitBreakerListener):
 breaker = pybreaker.CircuitBreaker(
     fail_max=BREAKER_FAIL_MAX,
     reset_timeout=BREAKER_RESET_TIMEOUT,
-    recover_timeout=BREAKER_RECOVER_TIMEOUT,
     listeners=[LogListener()]
 )

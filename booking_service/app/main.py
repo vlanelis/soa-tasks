@@ -209,3 +209,8 @@ def list_bookings(user_id: Optional[str] = None):
         return out
     finally:
         db.close()
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}

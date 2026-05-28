@@ -1,0 +1,166 @@
+name: CI
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+      - name: Build flight-service
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: flight_service/Dockerfile
+          load: true
+          tags: flight-service:ci
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+          build-args: |
+            PROTO_SRC=./proto
+      - name: Build booking-service
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: booking_service/Dockerfile
+          load: true
+          tags: booking-service:ci
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+  unit-tests-flight:
+    runs-on: ubuntu-latest
+    needs: [ ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: ''
+      - name: Install dependencies
+        run: |
+          pip install -r flight_service/requirements.txt
+          pip install pytest grpcio-tools
+      - name: Generate gRPC code
+        run: |
+          python -m grpc_tools.protoc -Iproto --python_out=flight_service --grpc_python_out=flight_service proto/flight.proto
+      - name: Run unit tests for flight-service
+        run: |
+          cd flight_service
+          python -m pytest tests -v
+
+  unit-tests-booking:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: ''
+      - name: Install dependencies
+        run: |
+          pip install -r booking_service/requirements.txt
+          pip install pytest httpx2 grpcio-tools
+      - name: Generate gRPC code
+        run: |
+          python -m grpc_tools.protoc -Iproto --python_out=booking_service --grpc_python_out=booking_service proto/flight.proto
+      - name: Run unit tests for booking-service
+        run: |
+          cd booking_service
+          python -m pytest tests -v
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: [ build, unit-tests-flight, unit-tests-booking ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create test docker-compose override
+        run: |
+          cat > docker-compose.test.yml <<EOF
+          services:
+            flight-service:
+              image: flight-service:ci
+            booking-service:
+              image: booking-service:ci
+            integration-tests:
+              build:
+                context: .
+                dockerfile: tests/integration/Dockerfile
+              depends_on:
+                flight-service:
+                  condition: service_healthy
+                booking-service:
+                  condition: service_healthy
+                flight-db:
+                  condition: service_healthy
+                booking-db:
+                  condition: service_healthy
+                redis-sentinel:
+                  condition: service_started
+              environment:
+                BOOKING_API_URL: http://booking-service:8000
+                FLIGHT_GRPC_ADDR: flight-service:50051
+                TEST_API_KEY: secret-service-key
+              command: python -m pytest -v /tests
+          EOF
+      - name: Run integration tests
+        run: |
+          docker compose -f docker-compose.yaml -f docker-compose.test.yml up \
+            --abort-on-container-exit --exit-code-from integration-tests
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    needs: [ build, unit-tests-flight, unit-tests-booking ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create docker-compose.e2e.yml
+        run: |
+          cat > docker-compose.e2e.yml <<EOF
+          services:
+            flight-service:
+              image: flight-service:ci
+            booking-service:
+              image: booking-service:ci
+            e2e-tests:
+              build:
+                context: .
+                dockerfile: tests/e2e/Dockerfile
+              depends_on:
+                flight-service:
+                  condition: service_healthy
+                booking-service:
+                  condition: service_healthy
+                flight-db:
+                  condition: service_healthy
+                booking-db:
+                  condition: service_healthy
+                redis-sentinel:
+                  condition: service_started
+              environment:
+                BOOKING_API_URL: http://booking-service:8000
+                BOOKING_DB_DSN: postgresql://postgres:postgres@booking-db:5432/booking
+                FLIGHT_DB_DSN: postgresql://postgres:postgres@flight-db:5432/flight
+              command: pytest -v
+          EOF
+      - name: Run E2E tests
+        run: |
+          docker compose -f docker-compose.yaml -f docker-compose.e2e.yml up \
+            --abort-on-container-exit --exit-code-from e2e-tests

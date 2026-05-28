@@ -3,6 +3,8 @@ from concurrent import futures
 from datetime import datetime
 import logging
 
+from grpc_health.v1 import health_pb2, health_pb2_grpc
+
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
@@ -59,6 +61,7 @@ class FlightService(flight_pb2_grpc.FlightServiceServicer):
 
         if not flight:
             context.abort(grpc.StatusCode.NOT_FOUND, "flight not found")
+            return
 
         data = {"flight": serialize_flight(flight)}
 
@@ -146,12 +149,15 @@ class FlightService(flight_pb2_grpc.FlightServiceServicer):
 
         if not flight:
             context.abort(grpc.StatusCode.NOT_FOUND, "flight not found")
+            return
 
         if flight.status != FlightStatus.SCHEDULED:
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, "flight not active")
+            return
 
         if flight.available_seats < request.seat_count:
             context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, "not enough seats")
+            return
 
         flight.available_seats -= request.seat_count
 
@@ -176,55 +182,54 @@ class FlightService(flight_pb2_grpc.FlightServiceServicer):
             reservation_id=str(reservation.id)
         )
 
-    def ReleaseSeats(self, request, context):
+    def ReleaseReservation(self, request, context):
+        db = SessionLocal()
+        try:
+            reservation = (
+                db.query(SeatReservation)
+                .filter_by(booking_id=request.booking_id)
+                .with_for_update()
+                .first()
+            )
+            if not reservation:
+                context.abort(grpc.StatusCode.NOT_FOUND, "reservation not found")
+                return
 
-        db: Session = SessionLocal()
+            if reservation.status != ReservationStatus.ACTIVE:
+                return flight_pb2.ReleaseReservationResponse(success=True)
 
-        reservation = db.query(SeatReservation)\
-            .with_for_update()\
-            .get(request.reservation_id)
+            flight = db.query(Flight).with_for_update().get(reservation.flight_id)
+            flight.available_seats += reservation.seat_count
+            reservation.status = ReservationStatus.RELEASED
+            db.commit()
 
-        if not reservation:
-            context.abort(grpc.StatusCode.NOT_FOUND, "reservation not found")
+            invalidate_flight(str(flight.id))
+            invalidate_search(
+                flight.origin,
+                flight.destination,
+                flight.departure_time.date().isoformat()
+            )
+            return flight_pb2.ReleaseReservationResponse(success=True)
+        finally:
+            db.close()
 
-        if reservation.status != ReservationStatus.ACTIVE:
-            return flight_pb2.ReleaseSeatsResponse(success=True)
 
-        flight = db.query(Flight)\
-            .with_for_update()\
-            .get(reservation.flight_id)
-
-        flight.available_seats += reservation.seat_count
-
-        reservation.status = ReservationStatus.RELEASED
-
-        db.commit()
-
-        invalidate_flight(str(flight.id))
-        invalidate_search(
-            flight.origin,
-            flight.destination,
-            flight.departure_time.date().isoformat()
-        )
-
-        return flight_pb2.ReleaseSeatsResponse(success=True)
+class HealthServicer(health_pb2_grpc.HealthServicer):
+    def Check(self, request, context):
+        return health_pb2.HealthCheckResponse(status=health_pb2.HealthCheckResponse.SERVING)
 
 
 def serve():
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=10),
-        interceptors = [ApiKeyInterceptor()]
+        interceptors=[ApiKeyInterceptor()]
     )
 
-    flight_pb2_grpc.add_FlightServiceServicer_to_server(
-        FlightService(),
-        server
-    )
+    flight_pb2_grpc.add_FlightServiceServicer_to_server(FlightService(), server)
+    health_pb2_grpc.add_HealthServicer_to_server(HealthServicer(), server)
 
     server.add_insecure_port("[::]:50051")
-
     server.start()
-
     server.wait_for_termination()
 
 

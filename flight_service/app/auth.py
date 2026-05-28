@@ -4,6 +4,9 @@ from .config import SERVICE_API_KEY
 
 class ApiKeyInterceptor(grpc.ServerInterceptor):
     def intercept_service(self, continuation, handler_call_details):
+        if handler_call_details.method == "/grpc.health.v1.Health/Check":
+            return continuation(handler_call_details)
+
         meta = {}
         if handler_call_details.invocation_metadata:
             for k, v in handler_call_details.invocation_metadata:
