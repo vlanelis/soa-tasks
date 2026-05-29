@@ -164,3 +164,56 @@ jobs:
         run: |
           docker compose -f docker-compose.yaml -f docker-compose.e2e.yml up \
             --abort-on-container-exit --exit-code-from e2e-tests
+
+  load-test:
+    runs-on: ubuntu-latest
+    needs: [ build, unit-tests-flight, unit-tests-booking ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create docker-compose.loadtest.yml (without volume)
+        run: |
+          cat > docker-compose.loadtest.yml <<EOF
+          services:
+            flight-service:
+              image: flight-service:ci
+              healthcheck:
+                test: ["CMD", "/bin/grpc_health_probe", "-addr=:50051"]
+                interval: 5s
+                timeout: 3s
+                retries: 10
+                start_period: 10s
+            booking-service:
+              image: booking-service:ci
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+                interval: 5s
+                timeout: 3s
+                retries: 10
+                start_period: 10s
+            k6:
+              build: ./loadtest
+              environment:
+                BOOKING_URL: http://booking-service:8000
+          EOF
+      - name: Build k6 image
+        run: docker compose -f docker-compose.yaml -f docker-compose.loadtest.yml build k6
+      - name: Start services (flight, booking)
+        run: docker compose -f docker-compose.yaml -f docker-compose.loadtest.yml up -d flight-service booking-service
+      - name: Wait for services to be healthy
+        run: |
+          until docker inspect --format='{{.State.Health.Status}}' $(docker compose -f docker-compose.yaml -f docker-compose.loadtest.yml ps -q booking-service) | grep -q healthy; do sleep 2; done
+          until docker inspect --format='{{.State.Health.Status}}' $(docker compose -f docker-compose.yaml -f docker-compose.loadtest.yml ps -q flight-service) | grep -q healthy; do sleep 2; done
+      - name: Create results directory
+        run: mkdir -p ./loadtest/results
+      - name: Run k6 load test
+        run: |
+          docker compose -f docker-compose.yaml -f docker-compose.loadtest.yml run --rm k6 run --out json /script.js | tee ./loadtest/results/results.json
+      - name: Upload k6 results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: k6-load-test-results
+          path: loadtest/results/results.json
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker-compose.yaml -f docker-compose.loadtest.yml down

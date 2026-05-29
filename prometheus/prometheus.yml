@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: 'flight-service'
+    static_configs:
+      - targets: ['flight-service:8001']
+  - job_name: 'booking-service'
+    static_configs:
+      - targets: ['booking-service:8000']
+  - job_name: 'postgres-flight'
+    static_configs:
+      - targets: [ 'postgres-exporter-flight:9187' ]
+  - job_name: 'postgres-booking'
+    static_configs:
+      - targets: [ 'postgres-exporter-booking:9187' ]
+  - job_name: 'redis'
+    static_configs:
+      - targets: [ 'redis-exporter:9121' ]

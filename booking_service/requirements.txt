@@ -10,3 +10,4 @@ redis
 alembic
 python-dotenv
 pydantic[email]
+prometheus-client

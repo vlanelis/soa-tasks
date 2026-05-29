@@ -5,3 +5,4 @@ psycopg2-binary
 redis
 alembic
 grpcio-health-checking
+prometheus-client

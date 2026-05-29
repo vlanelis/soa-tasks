@@ -81,6 +81,7 @@ services:
         condition: service_started
     ports:
       - "50051:50051"
+      - "8001:8001"
     healthcheck:
       test: [ "CMD", "/bin/grpc_health_probe", "-addr=:50051" ]
       interval: 5s
@@ -113,3 +114,70 @@ services:
       timeout: 3s
       retries: 5
       start_period: 10s
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+
+  postgres-exporter-flight:
+    image: prometheuscommunity/postgres-exporter:latest
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@flight-db:5432/flight?sslmode=disable"
+    ports:
+      - "9187:9187"
+    depends_on:
+      - flight-db
+
+  postgres-exporter-booking:
+    image: prometheuscommunity/postgres-exporter:latest
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@booking-db:5432/booking?sslmode=disable"
+    ports:
+      - "9188:9187"
+    depends_on:
+      - booking-db
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    environment:
+      REDIS_ADDR: "redis-master:6379"
+    ports:
+      - "9121:9121"
+    depends_on:
+      - redis-master
+
+  integration-tests:
+    build:
+      context: .
+      dockerfile: tests/integration/Dockerfile
+    depends_on:
+      flight-service:
+        condition: service_healthy
+      booking-service:
+        condition: service_healthy
+      flight-db:
+        condition: service_healthy
+      booking-db:
+        condition: service_healthy
+      redis-sentinel:
+        condition: service_started
+    environment:
+      BOOKING_API_URL: http://booking-service:8000
+      FLIGHT_GRPC_ADDR: flight-service:50051
+      TEST_API_KEY: secret-service-key
+    command: python -m pytest -v /tests

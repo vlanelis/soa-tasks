@@ -1,18 +1,23 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel, Field, EmailStr
-from typing import Optional, List
+from typing import Optional
 from uuid import UUID, uuid4
 from decimal import Decimal
+import logging
+
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from sqlalchemy.exc import IntegrityError
+
 from .database import SessionLocal
+from .middleware import PrometheusMiddleware
 from .models import Booking, BookingStatus
 from .grpc_client import get_flight, reserve_seats, release_reservation, search_flights
-from sqlalchemy.exc import IntegrityError
-import logging
 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("booking_service")
 app = FastAPI(title="Booking Service")
+app.add_middleware(PrometheusMiddleware)
 
 
 class CreateBookingReq(BaseModel):
@@ -209,6 +214,11 @@ def list_bookings(user_id: Optional[str] = None):
         return out
     finally:
         db.close()
+
+
+@app.get("/metrics")
+async def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/health")

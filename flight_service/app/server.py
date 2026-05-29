@@ -2,8 +2,11 @@ import grpc
 from concurrent import futures
 from datetime import datetime
 import logging
+import threading
 
 from grpc_health.v1 import health_pb2, health_pb2_grpc
+
+from prometheus_client import start_http_server
 
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
@@ -15,6 +18,7 @@ from .cache import (
     get_search, set_search, invalidate_search
 )
 from .auth import ApiKeyInterceptor
+from .metrics import PrometheusInterceptor
 
 import flight_pb2
 import flight_pb2_grpc
@@ -57,19 +61,22 @@ class FlightService(flight_pb2_grpc.FlightServiceServicer):
         logger.info("Flight cache miss: %s", request.id)
         db: Session = SessionLocal()
 
-        flight = db.get(Flight, request.id)
+        try:
+            flight = db.get(Flight, request.id)
 
-        if not flight:
-            context.abort(grpc.StatusCode.NOT_FOUND, "flight not found")
-            return
+            if not flight:
+                context.abort(grpc.StatusCode.NOT_FOUND, "flight not found")
+                return
 
-        data = {"flight": serialize_flight(flight)}
+            data = {"flight": serialize_flight(flight)}
 
-        set_flight(request.id, data)
+            set_flight(request.id, data)
 
-        restore_cached_flight(data["flight"])
+            restore_cached_flight(data["flight"])
 
-        return flight_pb2.FlightResponse(**data)
+            return flight_pb2.FlightResponse(**data)
+        finally:
+            db.close()
 
     def SearchFlights(self, request, context):
         date = request.date.ToDatetime().strftime("%Y-%m-%d")
@@ -93,94 +100,100 @@ class FlightService(flight_pb2_grpc.FlightServiceServicer):
 
         db: Session = SessionLocal()
 
-        if date:
-            start = datetime.strptime(date, "%Y-%m-%d")
-            end = start.replace(hour=23, minute=59, second=59)
+        try:
+            if date:
+                start = datetime.strptime(date, "%Y-%m-%d")
+                end = start.replace(hour=23, minute=59, second=59)
 
-            flights = db.query(Flight).filter(
-                and_(
-                    Flight.origin == request.origin,
-                    Flight.destination == request.destination,
-                    Flight.departure_time >= start,
-                    Flight.departure_time <= end,
-                    Flight.status == FlightStatus.SCHEDULED
-                )
-            ).all()
-        else:
-            flights = db.query(Flight).filter(
-                and_(
-                    Flight.origin == request.origin,
-                    Flight.destination == request.destination,
-                    Flight.status == FlightStatus.SCHEDULED
-                )
-            ).all()
+                flights = db.query(Flight).filter(
+                    and_(
+                        Flight.origin == request.origin,
+                        Flight.destination == request.destination,
+                        Flight.departure_time >= start,
+                        Flight.departure_time <= end,
+                        Flight.status == FlightStatus.SCHEDULED
+                    )
+                ).all()
+            else:
+                flights = db.query(Flight).filter(
+                    and_(
+                        Flight.origin == request.origin,
+                        Flight.destination == request.destination,
+                        Flight.status == FlightStatus.SCHEDULED
+                    )
+                ).all()
 
-        result = [serialize_flight(f) for f in flights]
+            result = [serialize_flight(f) for f in flights]
 
-        data = {"flights": result}
+            data = {"flights": result}
 
-        set_search(
-            request.origin,
-            request.destination,
-            date,
-            data
-        )
-        for flight in data["flights"]:
-            restore_cached_flight(flight)
+            set_search(
+                request.origin,
+                request.destination,
+                date,
+                data
+            )
+            for flight in data["flights"]:
+                restore_cached_flight(flight)
 
-        return flight_pb2.SearchFlightsResponse(flights=result)
+            return flight_pb2.SearchFlightsResponse(flights=result)
+        finally:
+            db.close()
 
     def ReserveSeats(self, request, context):
-
         db: Session = SessionLocal()
 
-        existing = db.query(SeatReservation).filter_by(
-            booking_id=request.booking_id
-        ).first()
+        try:
+            existing = db.query(SeatReservation).filter_by(
+                booking_id=request.booking_id
+            ).first()
 
-        if existing:
-            return flight_pb2.ReserveSeatsResponse(
-                reservation_id=str(existing.id)
+            if existing:
+                return flight_pb2.ReserveSeatsResponse(
+                    reservation_id=str(existing.id)
+                )
+
+            flight = db.query(Flight)\
+                .with_for_update()\
+                .get(request.flight_id)
+
+            if not flight:
+                context.abort(grpc.StatusCode.NOT_FOUND, "flight not found")
+                return
+
+            if flight.status != FlightStatus.SCHEDULED:
+                context.abort(grpc.StatusCode.FAILED_PRECONDITION, "flight not active")
+                return
+
+            if flight.available_seats < request.seat_count:
+                context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, "not enough seats")
+                return
+
+            flight.available_seats -= request.seat_count
+
+            reservation = SeatReservation(
+                flight_id=request.flight_id,
+                booking_id=request.booking_id,
+                seat_count=request.seat_count,
+                status=ReservationStatus.ACTIVE
             )
 
-        flight = db.query(Flight)\
-            .with_for_update()\
-            .get(request.flight_id)
+            db.add(reservation)
+            db.commit()
 
-        if not flight:
-            context.abort(grpc.StatusCode.NOT_FOUND, "flight not found")
-            return
+            invalidate_flight(request.flight_id)
+            invalidate_search(
+                flight.origin,
+                flight.destination,
+                flight.departure_time.date().isoformat()
+            )
 
-        if flight.status != FlightStatus.SCHEDULED:
-            context.abort(grpc.StatusCode.FAILED_PRECONDITION, "flight not active")
-            return
+            return flight_pb2.ReserveSeatsResponse(
+                reservation_id=str(reservation.id)
+            )
 
-        if flight.available_seats < request.seat_count:
-            context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, "not enough seats")
-            return
-
-        flight.available_seats -= request.seat_count
-
-        reservation = SeatReservation(
-            flight_id=request.flight_id,
-            booking_id=request.booking_id,
-            seat_count=request.seat_count,
-            status=ReservationStatus.ACTIVE
-        )
-
-        db.add(reservation)
-        db.commit()
-
-        invalidate_flight(request.flight_id)
-        invalidate_search(
-            flight.origin,
-            flight.destination,
-            flight.departure_time.date().isoformat()
-        )
-
-        return flight_pb2.ReserveSeatsResponse(
-            reservation_id=str(reservation.id)
-        )
+        finally:
+            db.close()
 
     def ReleaseReservation(self, request, context):
         db = SessionLocal()
@@ -219,10 +232,16 @@ class HealthServicer(health_pb2_grpc.HealthServicer):
         return health_pb2.HealthCheckResponse(status=health_pb2.HealthCheckResponse.SERVING)
 
 
+def serve_metrics():
+    start_http_server(8001)   # порт для метрик
+
+
 def serve():
+    threading.Thread(target=serve_metrics, daemon=True).start()
+
     server = grpc.server(
         futures.ThreadPoolExecutor(max_workers=10),
-        interceptors=[ApiKeyInterceptor()]
+        interceptors=[ApiKeyInterceptor(), PrometheusInterceptor()]
     )
 
     flight_pb2_grpc.add_FlightServiceServicer_to_server(FlightService(), server)
