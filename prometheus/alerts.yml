@@ -1,0 +1,44 @@
+groups:
+  - name: service_alerts
+    rules:
+      - alert: HighErrorRate_Booking
+        expr: |
+          (
+            sum(rate(http_requests_total{job="booking-service",status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="booking-service"}[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Booking service error rate > 5%"
+      - alert: HighLatency_Booking
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="booking-service"}[5m])) by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Booking service p95 latency > 1s"
+      - alert: HighErrorRate_Flight
+        expr: |
+          (
+            sum(rate(grpc_errors_total{job="flight-service",error_type=~"INTERNAL|UNAVAILABLE|UNKNOWN|DATA_LOSS|ABORTED"}[5m]))
+            /
+            sum(rate(grpc_requests_total{job="flight-service"}[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Flight service error rate > 5%"
+      - alert: ServiceDown
+        expr: up{job=~"booking-service|flight-service"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"

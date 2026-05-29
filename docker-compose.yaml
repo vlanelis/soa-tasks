@@ -121,6 +121,7 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
 
@@ -161,23 +162,11 @@ services:
     depends_on:
       - redis-master
 
-  integration-tests:
-    build:
-      context: .
-      dockerfile: tests/integration/Dockerfile
-    depends_on:
-      flight-service:
-        condition: service_healthy
-      booking-service:
-        condition: service_healthy
-      flight-db:
-        condition: service_healthy
-      booking-db:
-        condition: service_healthy
-      redis-sentinel:
-        condition: service_started
-    environment:
-      BOOKING_API_URL: http://booking-service:8000
-      FLIGHT_GRPC_ADDR: flight-service:50051
-      TEST_API_KEY: secret-service-key
-    command: python -m pytest -v /tests
+  alertmanager:
+    image: prom/alertmanager:latest
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'

@@ -198,7 +198,7 @@ jobs:
       - name: Build k6 image
         run: docker compose -f docker-compose.yaml -f docker-compose.loadtest.yml build k6
       - name: Start services (flight, booking)
-        run: docker compose -f docker-compose.yaml -f docker-compose.loadtest.yml up -d flight-service booking-service
+        run: docker compose -f docker-compose.yaml -f docker-compose.loadtest.yml up -d
       - name: Wait for services to be healthy
         run: |
           until docker inspect --format='{{.State.Health.Status}}' $(docker compose -f docker-compose.yaml -f docker-compose.loadtest.yml ps -q booking-service) | grep -q healthy; do sleep 2; done
@@ -208,6 +208,10 @@ jobs:
       - name: Run k6 load test
         run: |
           docker compose -f docker-compose.yaml -f docker-compose.loadtest.yml run --rm k6 run --out json /script.js | tee ./loadtest/results/results.json
+      - name: Check Prometheus metrics (SLI)
+        run: |
+          pip install --break-system-packages requests
+          python scripts/check_metrics.py
       - name: Upload k6 results
         uses: actions/upload-artifact@v4
         if: always()
